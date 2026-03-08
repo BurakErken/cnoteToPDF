@@ -1146,12 +1146,19 @@ document.addEventListener('DOMContentLoaded', () => {
             button: 0 // Sol tık olarak simüle ediyoruz
         });
 
-        // Simüle edilmiş olayı asıl hedefe gönder
-        touch.target.dispatchEvent(simulatedEvent);
+    touch.target.dispatchEvent(simulatedEvent);
 
-        // Canvas veya seçim kutusu üzerindeyken sayfanın kaymasını (scroll) engelle
+        // --- AKILLI KAYDIRMA (SCROLL) KONTROLÜ ---
         if (e.target === canvas || e.target.closest('.selection-box')) {
-            if (e.cancelable) e.preventDefault();
+            const isHandle = e.target.classList && e.target.classList.contains('resize-handle');
+            
+            // SADECE şu durumlarda ekranın kaymasını engelle:
+            // 1. Kalem veya silgi modundaysak
+            // 2. Bir nesne sürükleniyorsa (isDragging) veya boyutu değiştiriliyorsa (isResizing)
+            // 3. Doğrudan yeniden boyutlandırma noktalarına dokunuluyorsa
+            if (currentMode === 'pen' || currentMode === 'eraser' || isDragging || isResizing || isHandle) {
+                if (e.cancelable) e.preventDefault();
+            }
         }
     }
 
