@@ -1121,5 +1121,59 @@ document.addEventListener('DOMContentLoaded', () => {
     function hideSelectionBox() {
         selectionBox.style.display = 'none';
     }
+// --- MOBİL DOKUNMATİK (TOUCH) DESTEĞİ KÖPRÜSÜ ---
+    function touchToMouse(e) {
+        const touch = e.changedTouches[0];
+        let type = "";
 
+        switch (e.type) {
+            case "touchstart": type = "mousedown"; break;
+            case "touchmove":  type = "mousemove"; break;
+            case "touchend":   type = "mouseup"; break;
+            case "touchcancel": type = "mouseout"; break;
+            default: return;
+        }
+
+        // Dokunma hareketini, senin kodunun anladığı fare hareketine çeviriyoruz
+        const simulatedEvent = new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            screenX: touch.screenX,
+            screenY: touch.screenY,
+            button: 0 // Sol tık olarak simüle ediyoruz
+        });
+
+        // Simüle edilmiş olayı asıl hedefe gönder
+        touch.target.dispatchEvent(simulatedEvent);
+
+        // Canvas veya seçim kutusu üzerindeyken sayfanın kaymasını (scroll) engelle
+        if (e.target === canvas || e.target.closest('.selection-box')) {
+            if (e.cancelable) e.preventDefault();
+        }
+    }
+
+    // Touch olaylarını ana elemanlara bağla
+    canvas.addEventListener("touchstart", touchToMouse, { passive: false });
+    canvas.addEventListener("touchmove", touchToMouse, { passive: false });
+    canvas.addEventListener("touchend", touchToMouse, { passive: false });
+    canvas.addEventListener("touchcancel", touchToMouse, { passive: false });
+
+    selectionBox.addEventListener("touchstart", touchToMouse, { passive: false });
+
+    // Resim/Yazı taşırken veya büyütürken parmak canvas dışına çıkarsa diye window dinleyicileri
+    window.addEventListener("touchmove", (e) => {
+        if (isDragging || isResizing) {
+            touchToMouse(e);
+            if (e.cancelable) e.preventDefault();
+        }
+    }, { passive: false });
+
+    window.addEventListener("touchend", (e) => {
+        if (isDragging || isResizing) {
+            touchToMouse(e);
+        }
+    }, { passive: false });
 });
