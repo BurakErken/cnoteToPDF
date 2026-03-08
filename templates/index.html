@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CollaNote Okuyucu & PDF Dönüştürücü</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body class="light-mode paper-blank">
+
+    <!-- Sürükle Bırak Ekranı (İlk Açılış) -->
+    <div id="dropZone" class="drop-zone">
+        <div class="drop-content">
+            <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+            <h2>.cnote veya .zip Dosyasını Sürükle & Bırak</h2>
+            <p>Veya seçmek için tıklayın</p>
+            <input type="file" id="fileInput" accept=".cnote,.zip" style="display: none;">
+            <button class="btn primary-btn" onclick="document.getElementById('fileInput').click()">Dosya Seç</button>
+        </div>
+        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+            <div class="spinner"></div>
+            <p>İşleniyor, lütfen bekleyin...</p>
+        </div>
+    </div>
+
+    <!-- Ana Uygulama Arayüzü -->
+    <div id="appContainer" class="app-container" style="display: none;">
+
+        <!-- Sol Menü -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h3><i class="fa-solid fa-book-open"></i> Sayfalar</h3>
+            </div>
+            <ul id="pageList" class="page-list">
+                <!-- Sayfalar buraya dinamik eklenecek -->
+            </ul>
+
+            <div class="sidebar-header" id="galleryHeader" style="margin-top: 1.5rem; display: none;">
+                <h3><i class="fa-solid fa-images"></i> Sayfa Resimleri</h3>
+            </div>
+            <div id="imageGallery" class="image-gallery" style="display: none;">
+                <!-- Sayfadaki orijinal resimler JS ile buraya eklenecek -->
+            </div>
+        </aside>
+
+        <!-- Sağ Taraf (Canvas ve Kontroller) -->
+        <main class="main-content">
+            <header class="toolbar glass-panel">
+                <!-- Mobil Menü Butonu (Yalnızca küçük ekranlarda görünür) -->
+                <button id="mobileMenuBtn" class="tool-btn mobile-only" title="Menü">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+
+                <div class="toolbar-group">
+                    <label class="setting-label">
+                        <i class="fa-solid fa-pen-nib"></i> Kalınlık (<span id="thicknessVal">1.5</span>)
+                    </label>
+                    <input type="range" id="penThickness" min="0.1" max="6.0" step="0.1" value="1.5">
+                </div>
+
+                <div class="toolbar-group">
+                    <label class="setting-label"><i class="fa-solid fa-palette"></i> Tema</label>
+                    <select id="themeSelect" class="styled-select">
+                        <option value="light">Aydınlık Mod</option>
+                        <option value="dark">Karanlık Mod</option>
+                    </select>
+                </div>
+
+                <!-- View / Settings Group -->
+                <div class="toolbar-group">
+                    <label class="setting-label"><i class="fa-solid fa-file-lines"></i> Kağıt Tipi</label>
+                    <!-- ... unchanged code after this inside the component ... -->
+                    <select id="paperSelect" class="styled-select">
+                        <option value="paper-blank">Düz Beyaz</option>
+                        <option value="paper-lined">Çizgili</option>
+                        <option value="paper-grid">Kareli</option>
+                    </select>
+                </div>
+
+                <div class="toolbar-delimiter"></div>
+
+                <!-- Edit Group -->
+                <div class="toolbar-group">
+                    <button id="toolCursor" class="tool-btn active" title="İmleç / Kaydır">
+                        <i class="fa-solid fa-arrow-pointer"></i>
+                    </button>
+                    <button id="toolPen" class="tool-btn" title="Kalem">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
+                    <button id="toolEraser" class="tool-btn" title="Silgi">
+                        <i class="fa-solid fa-eraser"></i>
+                    </button>
+                    <input type="color" id="drawColor" value="#ff0000" class="color-picker" title="Renk Seç"
+                        style="display: none;">
+                    <!-- Separate draw thickness slider -->
+                    <span id="drawThicknessWrap" style="display:none; align-items:center; gap:0.4rem;">
+                        <i class="fa-solid fa-brush" style="font-size:0.9rem;"></i>
+                        <input type="range" id="drawThickness" min="1" max="30" step="1" value="4"
+                            title="Kalem Kalınlığı">
+                        <span id="drawThicknessVal" style="min-width:24px;">4</span>
+                    </span>
+
+                    <button id="toolText" class="tool-btn" title="Metin Alanı">
+                        <i class="fa-solid fa-t"></i>
+                    </button>
+
+                    <span id="textToolOptions" style="display:none; align-items:center;">
+                        <!-- Options dynamically updated by JS if needed -->
+                    </span> <button class="tool-btn" title="Resim Ekle"
+                        onclick="document.getElementById('imageInput').click()">
+                        <i class="fa-solid fa-image"></i>
+                    </button>
+                    <input type="file" id="imageInput" accept="image/*" style="display: none;">
+
+                    <button id="clearDrawingsBtn" class="tool-btn" title="Çizimleri Temizle" style="color: #e74c3c;">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
+
+                <div class="toolbar-group ml-auto">
+                    <button id="exportPdfBtn" class="btn success-btn">
+                        <i class="fa-solid fa-file-pdf"></i> PDF İndir
+                    </button>
+                </div>
+            </header>
+
+            <div class="canvas-container-wrapper">
+                <div class="canvas-container" id="canvasWrapper">
+                    <!-- Canvas -->
+                    <canvas id="noteCanvas"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Zoom Controls (Fixed to viewport, never scrolls away) -->
+    <div class="floating-zoom-controls glass-panel">
+        <button id="zoomOutBtn" class="tool-btn" title="Uzaklaştır"><i class="fa-solid fa-minus"></i></button>
+        <input type="number" id="zoomInput" class="zoom-input" value="100" min="10" max="500" step="5"
+            title="Özel Değer %">
+        <span class="zoom-percent-sign">%</span>
+        <button id="zoomInBtn" class="tool-btn" title="Yakınlaştır"><i class="fa-solid fa-plus"></i></button>
+    </div>
+
+    <!-- jsPDF ve html2canvas kütüphaneleri -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="/static/main.js"></script>
+</body>
+
+</html>

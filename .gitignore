@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+temp_extract/
+uploads/
+.env
+.DS_Store
+*.cnote
+*.zip
+inspect_cpage.py
+dump_keys.py
+keys.txt
+debug_out.txt
+inspect_out.txt
+inspect_out2.txt
+inspect_out3.txt
+check_images.py
+script.py
