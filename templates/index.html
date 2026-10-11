@@ -191,9 +191,24 @@
         </div>
     </div>
 
-    <!-- jsPDF ve html2canvas kütüphaneleri -->
+    <!-- PDF İndir: bu sayfa mı, tüm sayfalar mı? -->
+    <div id="pdfModal" class="pdf-modal" style="display: none;">
+        <div class="pdf-modal-content glass-panel">
+            <h3><i class="fa-solid fa-file-pdf"></i> PDF İndir</h3>
+            <button id="pdfCurrentBtn" class="pdf-option">
+                <i class="fa-regular fa-file"></i>
+                <span><strong id="pdfCurrentTitle">Yalnızca bu sayfa</strong><small id="pdfCurrentInfo"></small></span>
+            </button>
+            <button id="pdfAllBtn" class="pdf-option">
+                <i class="fa-regular fa-copy"></i>
+                <span><strong id="pdfAllTitle">Tüm sayfalar</strong><small id="pdfAllInfo"></small></span>
+            </button>
+            <button id="pdfCancelBtn" class="pdf-cancel">Vazgeç</button>
+        </div>
+    </div>
+
+    <!-- jsPDF kütüphanesi -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="/static/keynote.js"></script>
     <script src="/static/main.js"></script>
 </body>

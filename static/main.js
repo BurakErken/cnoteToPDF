@@ -42,6 +42,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let pagesData = [];
     let currentPageIndex = 0;
     let keynoteDoc = null; // Open Keynote presentation (.key files are read in the browser)
+    let currentFileBase = 'CollaNote'; // Open file's name without extension, used for PDF names
+
+    function setCurrentFile(file) {
+        currentFileBase = file.name.replace(/\.[^.]*$/, '').replace(/\.+$/, '').trim() || 'Belge';
+    }
 
     // Page formats: canvas resolution and on-screen size at 100% zoom
     const PAGE_FORMATS = {
@@ -126,6 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 closeKeynote();
+                setCurrentFile(file);
                 pagesData = data.pages;
                 currentPageIndex = 0;
                 setPageFormat('a4-portrait');
@@ -152,6 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const doc = await KeynoteReader.open(file);
             closeKeynote();
+            setCurrentFile(file);
             keynoteDoc = doc;
             doc.onChange = () => {
                 isBgCached = false;
@@ -272,6 +279,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function loadPage(index) {
         if (index < 0 || index >= pagesData.length) return;
+
+        // Each page keeps its own drawings, texts and images
+        if (activeTextEditor) finalizeTextEditor();
+        if (annotatedPage) {
+            annotatedPage.annotations = { drawings: userDrawings, images: userImages, texts: userTexts };
+        }
+        annotatedPage = pagesData[index];
+        const saved = annotatedPage.annotations || { drawings: [], images: [], texts: [] };
+        userDrawings = saved.drawings;
+        userImages = saved.images;
+        userTexts = saved.texts;
+        draggedItem = null;
+        isDragging = false;
+        pendingItem = null;
+        hideSelectionBox();
 
         currentPageIndex = index;
 
@@ -557,6 +579,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentStroke = null;
     let userImages = []; // {img: Image, x, y, width, height...}
     let userTexts = []; // {text: string, x, y, color, size...}
+    let annotatedPage = null; // Page whose annotations are in the three arrays above
+
+    // A page's drawings, images and texts (live arrays for the page on screen)
+    function annotationsOf(page) {
+        if (page === annotatedPage) return { drawings: userDrawings, images: userImages, texts: userTexts };
+        return page.annotations || { drawings: [], images: [], texts: [] };
+    }
+
     let draggedItem = null; // Currently selected item
     let isDragging = false; // Is the mouse held down?
     let dragOffsetX = 0;
@@ -1151,14 +1181,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isKey) {
                 keynoteDoc.render(bgCacheCtx, page.slideIndex, fit.x, fit.y, fit.scale);
             } else {
-                const points = page.points;
-
-                // Draw small rectangles instead of massive complex curved paths for extreme performance
-                for (let i = 0; i < points.length; i++) {
-                    let px = fit.x + points[i][0] * fit.scale;
-                    let py = fit.y + points[i][1] * fit.scale;
-                    bgCacheCtx.fillRect(px - size, py - size, size * 2, size * 2);
-                }
+                drawCnotePoints(bgCacheCtx, page, fit, size, isDarkMode ? '#f0f0f0' : '#111');
             }
 
             cachedPageIndex = currentPageIndex;
@@ -1168,9 +1191,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Draw Embedded Images FIRST (Under everything)
-        const pageImages = page.images || [];
+        drawCnoteImages(ctx, page, fit);
+
+        // Then output the cached stroke points
+        ctx.drawImage(bgCacheCanvas, 0, 0);
+
+        // 2-4. The user's own images, strokes and texts
+        drawAnnotations(ctx, { images: userImages, drawings: userDrawings, texts: userTexts });
+
+        // Ensure selection bounding box stays synced when scale changes
+        if (draggedItem) updateSelectionBox(draggedItem);
+    }
+
+    function drawCnotePoints(c, page, fit, size, color) {
+        const points = page.points;
+        c.fillStyle = color;
+
+        // Draw small rectangles instead of massive complex curved paths for extreme performance
+        for (let i = 0; i < points.length; i++) {
+            let px = fit.x + points[i][0] * fit.scale;
+            let py = fit.y + points[i][1] * fit.scale;
+            c.fillRect(px - size, py - size, size * 2, size * 2);
+        }
+    }
+
+    function drawCnoteImages(c, page, fit) {
         const pageW = CNOTE_WIDTH * fit.scale, pageH = CNOTE_HEIGHT * fit.scale;
-        pageImages.forEach(imgData => {
+        (page.images || []).forEach(imgData => {
             if (imgData.htmlImage && imgData.htmlImage.complete) {
                 // The bounds provided by parser are normalized relative to the page (0.0 - 1.0)
                 const x = imgData.rel_x !== undefined ? fit.x + imgData.rel_x * pageW : imgData.x;
@@ -1178,51 +1225,47 @@ document.addEventListener('DOMContentLoaded', () => {
                 const w = imgData.rel_w !== undefined ? imgData.rel_w * pageW : imgData.width;
                 const h = imgData.rel_h !== undefined ? imgData.rel_h * pageH : imgData.height;
 
-                ctx.drawImage(imgData.htmlImage, x, y, w, h);
+                c.drawImage(imgData.htmlImage, x, y, w, h);
             }
         });
+    }
 
-        // Then output the cached stroke points
-        ctx.drawImage(bgCacheCanvas, 0, 0);
-
+    function drawAnnotations(c, annotations) {
         // 2. Draw Built-in Images
-        userImages.forEach(item => {
-            ctx.drawImage(item.img, item.x, item.y, item.width, item.height);
+        annotations.images.forEach(item => {
+            c.drawImage(item.img, item.x, item.y, item.width, item.height);
         });
 
         // 3. Draw User Strokes
-        userDrawings.forEach(stroke => {
-            ctx.beginPath();
-            ctx.strokeStyle = stroke.color;
-            ctx.lineWidth = stroke.size;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+        annotations.drawings.forEach(stroke => {
+            c.beginPath();
+            c.strokeStyle = stroke.color;
+            c.lineWidth = stroke.size;
+            c.lineCap = 'round';
+            c.lineJoin = 'round';
 
             if (stroke.points.length > 0) {
-                ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+                c.moveTo(stroke.points[0][0], stroke.points[0][1]);
                 for (let i = 1; i < stroke.points.length; i++) {
-                    ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+                    c.lineTo(stroke.points[i][0], stroke.points[i][1]);
                 }
-                ctx.stroke();
+                c.stroke();
             }
         });
 
         // 4. Draw User Texts
-        userTexts.forEach(txt => {
+        annotations.texts.forEach(txt => {
             if (txt.isEditing) return; // Hide standard text if textarea is open
 
-            ctx.font = `500 ${txt.size}px Outfit`;
-            ctx.fillStyle = txt.color;
-            ctx.textBaseline = 'alphabetic';
+            c.font = `500 ${txt.size}px Outfit`;
+            c.fillStyle = txt.color;
+            c.textBaseline = 'alphabetic';
 
-            const lines = getWrappedTextLines(ctx, txt.text, txt.width || 800);
+            const lines = getWrappedTextLines(c, txt.text, txt.width || 800);
             lines.forEach((line, i) => {
-                ctx.fillText(line, txt.x, txt.y + (i * txt.size));
+                c.fillText(line, txt.x, txt.y + (i * txt.size));
             });
         });
-
-        // Ensure selection bounding box stays synced when scale changes
-        if (draggedItem) updateSelectionBox(draggedItem);
     }
 
     const zoomInput = document.getElementById('zoomInput');
@@ -1291,44 +1334,126 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- PDF Export Logic ---
-    exportPdfBtn.addEventListener('click', async () => {
+    // Pages are drawn straight into an off-screen canvas (no screenshot), so every page can be
+    // exported, not only the one on screen.
+    const pdfModal = document.getElementById('pdfModal');
+
+    exportPdfBtn.addEventListener('click', () => {
+        if (pagesData.length <= 1) {
+            exportPdf('current');
+            return;
+        }
+        const noun = isKeynotePage() ? 'slayt' : 'sayfa';
+        document.getElementById('pdfCurrentTitle').textContent = `Yalnızca bu ${noun}`;
+        document.getElementById('pdfCurrentInfo').textContent =
+            `${noun[0].toUpperCase() + noun.slice(1)} ${currentPageIndex + 1}`;
+        document.getElementById('pdfAllTitle').textContent = `Tüm ${noun}lar`;
+        document.getElementById('pdfAllInfo').textContent = `${pagesData.length} ${noun}, tek PDF dosyası`;
+        pdfModal.style.display = 'flex';
+    });
+
+    function closePdfModal() {
+        pdfModal.style.display = 'none';
+    }
+
+    document.getElementById('pdfCurrentBtn').addEventListener('click', () => { closePdfModal(); exportPdf('current'); });
+    document.getElementById('pdfAllBtn').addEventListener('click', () => { closePdfModal(); exportPdf('all'); });
+    document.getElementById('pdfCancelBtn').addEventListener('click', closePdfModal);
+    pdfModal.addEventListener('click', (e) => {
+        if (e.target === pdfModal) closePdfModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && pdfModal.style.display !== 'none') closePdfModal();
+    });
+
+    // Page background as on screen: page colour plus the lined/grid paper pattern
+    function paintPaper(c, w, h) {
+        c.fillStyle = getComputedStyle(canvasContainer).backgroundColor;
+        c.fillRect(0, 0, w, h);
+        const unit = w / pageFormat.baseW; // one CSS pixel at 100% zoom
+        const vars = getComputedStyle(document.body);
+        if (document.body.classList.contains('paper-lined')) {
+            c.fillStyle = vars.getPropertyValue('--lined-color').trim();
+            for (let y = 39 * unit; y < h; y += 40 * unit) c.fillRect(0, y, w, unit);
+        } else if (document.body.classList.contains('paper-grid')) {
+            c.fillStyle = vars.getPropertyValue('--grid-color').trim();
+            for (let y = 0; y < h; y += 20 * unit) c.fillRect(0, y, w, unit);
+            for (let x = 0; x < w; x += 20 * unit) c.fillRect(x, 0, unit, h);
+        }
+    }
+
+    // Waits until a CNote page's embedded pictures are decoded
+    function cnoteImagesReady(page) {
+        return Promise.all((page.images || []).map(imgData => {
+            if (!imgData.htmlImage) {
+                const img = new Image();
+                img.src = imgData.src;
+                imgData.htmlImage = img;
+            }
+            const img = imgData.htmlImage;
+            if (img.complete) return null;
+            return new Promise(resolve => {
+                img.addEventListener('load', resolve, { once: true });
+                img.addEventListener('error', resolve, { once: true });
+            });
+        }));
+    }
+
+    // Draws page `index` (content + the user's annotations) at full canvas resolution
+    async function renderPageForPdf(index) {
+        const page = pagesData[index];
+        const out = document.createElement('canvas');
+        out.width = canvas.width;
+        out.height = canvas.height;
+        const c = out.getContext('2d');
+        paintPaper(c, out.width, out.height);
+
+        if (page.type === 'key' && keynoteDoc) {
+            await keynoteDoc.ready(page.slideIndex);
+            const fit = contentFit(keynoteDoc.width, keynoteDoc.height);
+            keynoteDoc.render(c, page.slideIndex, fit.x, fit.y, fit.scale);
+        } else {
+            await cnoteImagesReady(page);
+            const fit = contentFit(CNOTE_WIDTH, CNOTE_HEIGHT);
+            const ink = document.body.classList.contains('dark-mode') ? '#f0f0f0' : '#111';
+            drawCnoteImages(c, page, fit);
+            drawCnotePoints(c, page, fit, parseFloat(penThickness.value), ink);
+        }
+        drawAnnotations(c, annotationsOf(page));
+        return out;
+    }
+
+    async function exportPdf(mode) {
+        if (activeTextEditor) finalizeTextEditor();
+        const indices = mode === 'all' ? pagesData.map((page, i) => i) : [currentPageIndex];
+        const isKey = isKeynotePage();
         const originalBtnText = exportPdfBtn.innerHTML;
-        exportPdfBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Dönüştürülüyor...';
         exportPdfBtn.disabled = true;
 
         try {
-            // Save current zoom, temporarily set to 100% for exact PDF render
-            const prevPercent = parseInt(zoomInput.value) || 100;
-            applyZoom(100);
-
-            // Allow DOM to update layout before taking screenshot
-            await new Promise(r => setTimeout(r, 100));
-
-            const canvasImage = await html2canvas(canvasContainer, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: window.getComputedStyle(canvasContainer).backgroundColor
-            });
-
-            // Restore previous zoom after capture
-            applyZoom(prevPercent);
-
-            const imgData = canvasImage.toDataURL('image/jpeg', 1.0);
             const { jsPDF } = window.jspdf;
-            // Landscape pages are 297 mm wide with a height that keeps the page's aspect ratio
+            // Portrait pages are A4; landscape pages are 297 mm wide and keep the page's aspect ratio
             const landscape = canvas.width > canvas.height;
-            const pdf = new jsPDF({
-                orientation: landscape ? 'landscape' : 'portrait',
-                unit: 'mm',
-                format: landscape ? [297, 297 * canvasImage.height / canvasImage.width] : 'a4'
-            });
+            const orientation = landscape ? 'landscape' : 'portrait';
+            const pageW = landscape ? 297 : 210;
+            const pageH = pageW * canvas.height / canvas.width;
+            const pdf = new jsPDF({ orientation, unit: 'mm', format: [pageW, pageH], compress: true });
 
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvasImage.height * pdfWidth) / canvasImage.width;
+            for (let n = 0; n < indices.length; n++) {
+                exportPdfBtn.innerHTML = indices.length > 1
+                    ? `<i class="fa-solid fa-spinner fa-spin"></i> Hazırlanıyor ${n + 1}/${indices.length}`
+                    : '<i class="fa-solid fa-spinner fa-spin"></i> Dönüştürülüyor...';
+                await new Promise(r => setTimeout(r, 0)); // let the progress text paint
 
-            pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-            pdf.save(isKeynotePage() ? `Slayt_${currentPageIndex + 1}.pdf` : `CollaNote_Sayfa_${currentPageIndex + 1}.pdf`);
+                const pageCanvas = await renderPageForPdf(indices[n]);
+                if (n > 0) pdf.addPage([pageW, pageH], orientation);
+                pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 0, pageW, pageH);
+            }
 
+            const label = isKey ? 'Slayt' : 'Sayfa';
+            pdf.save(mode === 'all'
+                ? `${currentFileBase}.pdf`
+                : `${currentFileBase}_${label}_${currentPageIndex + 1}.pdf`);
         } catch (error) {
             console.error('PDF Export Error:', error);
             alert('PDF oluşturulurken bir hata oluştu!');
@@ -1336,7 +1461,7 @@ document.addEventListener('DOMContentLoaded', () => {
             exportPdfBtn.innerHTML = originalBtnText;
             exportPdfBtn.disabled = false;
         }
-    });
+    }
 
     // --- Selection & Resize Overlay Logic ---
     let selectionBox = document.createElement('div');

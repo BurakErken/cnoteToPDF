@@ -900,16 +900,17 @@
             let entry = this.images.get(key);
             if (!entry) {
                 entry = { img: null, state: 'loading' };
+                entry.done = new Promise(resolve => { entry.resolve = resolve; });
                 this.images.set(key, entry);
                 const tryNext = async i => {
-                    if (i >= sources.length) { entry.state = 'error'; this.changed(); return; }
+                    if (i >= sources.length) { entry.state = 'error'; entry.resolve(); this.changed(); return; }
                     const file = this.dataFiles.get(sources[i]) || '';
                     if (/\.pdf$/i.test(file)) return tryNext(i + 1);
                     let url = null;
                     try { url = await this.mediaURL(sources[i]); } catch (e) { url = null; }
                     if (!url) return tryNext(i + 1);
                     const img = new Image();
-                    img.onload = () => { entry.img = img; entry.state = 'ready'; this.changed(); };
+                    img.onload = () => { entry.img = img; entry.state = 'ready'; entry.resolve(); this.changed(); };
                     img.onerror = () => tryNext(i + 1);
                     img.src = url;
                 };
@@ -1422,20 +1423,37 @@
             try { return this.slide(index).title; } catch (e) { return ''; }
         }
 
-        // Starts loading a slide's pictures so it can be shown without delay later.
-        preload(index) {
-            if (index < 0 || index >= this.slides.length) return;
+        // Source lists of every picture a slide draws.
+        pictureSources(index) {
+            const out = [];
             const slide = this.slide(index);
-            const load = fill => { if (fill && fill.type === 'image') this.image([fill.dataId]); };
+            const fill = f => { if (f && f.type === 'image') out.push([f.dataId]); };
             const walk = items => {
                 for (const it of items) {
                     if (it.kind === 'group') walk(it.children);
-                    else if ((it.kind === 'image' || it.kind === 'movie') && it.sources.length) this.image(it.sources);
-                    else load(it.fill);
+                    else if ((it.kind === 'image' || it.kind === 'movie') && it.sources.length) out.push(it.sources);
+                    else fill(it.fill);
                 }
             };
-            load(slide.background);
+            fill(slide.background);
             walk(slide.items);
+            return out;
+        }
+
+        // Starts loading a slide's pictures so it can be shown without delay later.
+        preload(index) {
+            if (index < 0 || index >= this.slides.length) return;
+            for (const sources of this.pictureSources(index)) this.image(sources);
+        }
+
+        // Resolves once every picture on the slide has loaded or failed (e.g. before printing it).
+        ready(index) {
+            const waits = this.pictureSources(index).map(sources => {
+                this.image(sources);
+                return this.images.get(sources.join(',')).done;
+            });
+            const timeout = new Promise(resolve => setTimeout(resolve, 15000));
+            return Promise.race([Promise.all(waits), timeout]);
         }
 
         // Media list for the sidebar gallery.
