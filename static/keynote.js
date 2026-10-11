@@ -1422,6 +1422,22 @@
             try { return this.slide(index).title; } catch (e) { return ''; }
         }
 
+        // Starts loading a slide's pictures so it can be shown without delay later.
+        preload(index) {
+            if (index < 0 || index >= this.slides.length) return;
+            const slide = this.slide(index);
+            const load = fill => { if (fill && fill.type === 'image') this.image([fill.dataId]); };
+            const walk = items => {
+                for (const it of items) {
+                    if (it.kind === 'group') walk(it.children);
+                    else if ((it.kind === 'image' || it.kind === 'movie') && it.sources.length) this.image(it.sources);
+                    else load(it.fill);
+                }
+            };
+            load(slide.background);
+            walk(slide.items);
+        }
+
         // Media list for the sidebar gallery.
         async slideMedia(index) {
             const out = [];

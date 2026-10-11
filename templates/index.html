@@ -136,6 +136,9 @@
                 </div>
 
                 <div class="toolbar-group ml-auto">
+                    <button id="slideshowBtn" class="btn primary-btn" style="display: none;" title="Slayt Gösterisi">
+                        <i class="fa-solid fa-play"></i> Slayt Gösterisi
+                    </button>
                     <button id="exportPdfBtn" class="btn success-btn">
                         <i class="fa-solid fa-file-pdf"></i> PDF İndir
                     </button>
@@ -158,6 +161,17 @@
             title="Özel Değer %">
         <span class="zoom-percent-sign">%</span>
         <button id="zoomInBtn" class="tool-btn" title="Yakınlaştır"><i class="fa-solid fa-plus"></i></button>
+    </div>
+
+    <!-- Keynote slayt gösterisi (tam ekran) -->
+    <div id="slideshow" class="slideshow" style="display: none;">
+        <canvas id="slideshowCanvas"></canvas>
+        <div class="slideshow-controls">
+            <button id="slideshowPrev" class="slideshow-btn" title="Önceki (←)"><i class="fa-solid fa-chevron-left"></i></button>
+            <span id="slideshowCounter">1 / 1</span>
+            <button id="slideshowNext" class="slideshow-btn" title="Sonraki (→)"><i class="fa-solid fa-chevron-right"></i></button>
+            <button id="slideshowExit" class="slideshow-btn" title="Çık (Esc)"><i class="fa-solid fa-xmark"></i></button>
+        </div>
     </div>
 
     <!-- Keynote slaytlarındaki videolar için oynatıcı -->

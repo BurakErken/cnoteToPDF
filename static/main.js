@@ -116,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 pagesData = data.pages;
                 currentPageIndex = 0;
                 setPageFormat('a4-portrait');
+                slideshowBtn.style.display = 'none';
 
                 // Show App, Hide Dropzone
                 dropZone.style.display = 'none';
@@ -140,7 +141,8 @@ document.addEventListener('DOMContentLoaded', () => {
             keynoteDoc = doc;
             doc.onChange = () => {
                 isBgCached = false;
-                drawCanvas();
+                if (slideshowOpen) renderSlideshow();
+                else drawCanvas();
             };
             pagesData = doc.slides.map((slide, i) => ({ type: 'key', slideIndex: i, points: [], images: [] }));
             currentPageIndex = 0;
@@ -148,6 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const ratio = doc.width / doc.height;
             setPageFormat(ratio < 1 ? 'a4-portrait' : Math.abs(ratio - 4 / 3) < 0.05 ? '4x3' : '16x9');
             setPaper('paper-blank');
+            slideshowBtn.style.display = '';
 
             dropZone.style.display = 'none';
             appContainer.style.display = 'flex';
@@ -356,6 +359,153 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && videoModal.style.display !== 'none') closeVideo();
+    });
+
+    // --- Slideshow (Keynote presentation mode) ---
+    const slideshowBtn = document.getElementById('slideshowBtn');
+    const slideshowEl = document.getElementById('slideshow');
+    const slideshowCanvas = document.getElementById('slideshowCanvas');
+    const slideshowCtx = slideshowCanvas.getContext('2d');
+    const slideshowCounter = document.getElementById('slideshowCounter');
+    let slideshowOpen = false;
+    let slideshowIndex = 0;
+    let slideshowIdleTimer = null;
+    let swipeStart = null;
+    let lastSwipeTime = 0;
+
+    function fullscreenElement() {
+        return document.fullscreenElement || document.webkitFullscreenElement;
+    }
+
+    function openSlideshow() {
+        if (!keynoteDoc) return;
+        slideshowOpen = true;
+        slideshowIndex = isKeynotePage() ? pagesData[currentPageIndex].slideIndex : 0;
+        slideshowEl.style.display = 'block';
+        if (document.activeElement) document.activeElement.blur();
+
+        // Fullscreen the whole page so the video player can still open above the slides
+        const root = document.documentElement;
+        const request = root.requestFullscreen || root.webkitRequestFullscreen;
+        if (request) {
+            try {
+                const result = request.call(root);
+                if (result && result.catch) result.catch(() => {});
+            } catch (error) {
+                // Not allowed here (e.g. iPhone): the overlay still covers the window
+            }
+        }
+        renderSlideshow();
+        wakeSlideshowControls();
+    }
+
+    function closeSlideshow() {
+        if (!slideshowOpen) return;
+        slideshowOpen = false;
+        slideshowEl.style.display = 'none';
+        clearTimeout(slideshowIdleTimer);
+        if (fullscreenElement()) {
+            const exit = document.exitFullscreen || document.webkitExitFullscreen;
+            const result = exit && exit.call(document);
+            if (result && result.catch) result.catch(() => {});
+        }
+        // Continue in the editor where the presentation stopped
+        loadPage(slideshowIndex);
+    }
+
+    function showSlide(index) {
+        slideshowIndex = Math.max(0, Math.min(keynoteDoc.slides.length - 1, index));
+        renderSlideshow();
+    }
+
+    function renderSlideshow() {
+        if (!slideshowOpen || !keynoteDoc) return;
+        const dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, Math.round(slideshowEl.clientWidth * dpr));
+        const h = Math.max(1, Math.round(slideshowEl.clientHeight * dpr));
+        if (slideshowCanvas.width !== w || slideshowCanvas.height !== h) {
+            slideshowCanvas.width = w;
+            slideshowCanvas.height = h;
+        }
+        slideshowCtx.fillStyle = '#000';
+        slideshowCtx.fillRect(0, 0, w, h);
+        const scale = Math.min(w / keynoteDoc.width, h / keynoteDoc.height);
+        keynoteDoc.render(slideshowCtx, slideshowIndex,
+            (w - keynoteDoc.width * scale) / 2, (h - keynoteDoc.height * scale) / 2, scale);
+        slideshowCounter.textContent = `${slideshowIndex + 1} / ${keynoteDoc.slides.length}`;
+        keynoteDoc.preload(slideshowIndex + 1);
+    }
+
+    // Shows the control bar and hides it (and the cursor) again after a short pause
+    function wakeSlideshowControls() {
+        slideshowEl.classList.remove('idle');
+        clearTimeout(slideshowIdleTimer);
+        slideshowIdleTimer = setTimeout(() => slideshowEl.classList.add('idle'), 2500);
+    }
+
+    slideshowBtn.addEventListener('click', openSlideshow);
+    document.getElementById('slideshowPrev').addEventListener('click', () => showSlide(slideshowIndex - 1));
+    document.getElementById('slideshowNext').addEventListener('click', () => showSlide(slideshowIndex + 1));
+    document.getElementById('slideshowExit').addEventListener('click', closeSlideshow);
+    slideshowEl.addEventListener('mousemove', wakeSlideshowControls);
+
+    // Click a video to play it, the left third to go back, anywhere else to go forward
+    slideshowCanvas.addEventListener('click', (e) => {
+        if (Date.now() - lastSwipeTime < 400) return;
+        const rect = slideshowCanvas.getBoundingClientRect();
+        const scale = Math.min(rect.width / keynoteDoc.width, rect.height / keynoteDoc.height);
+        const x = (e.clientX - rect.left - (rect.width - keynoteDoc.width * scale) / 2) / scale;
+        const y = (e.clientY - rect.top - (rect.height - keynoteDoc.height * scale) / 2) / scale;
+        if (keynoteDoc.isOverMovie(slideshowIndex, x, y)) {
+            keynoteDoc.movieAt(slideshowIndex, x, y)
+                .then(movie => { if (movie) openVideo(movie.url, movie.name); })
+                .catch(error => console.warn('Video error:', error));
+            return;
+        }
+        showSlide(slideshowIndex + (e.clientX - rect.left < rect.width / 3 ? -1 : 1));
+    });
+
+    // Swipe left/right on touch screens
+    slideshowEl.addEventListener('touchstart', (e) => {
+        const t = e.changedTouches[0];
+        swipeStart = { x: t.clientX, y: t.clientY };
+        wakeSlideshowControls();
+    }, { passive: true });
+
+    slideshowEl.addEventListener('touchend', (e) => {
+        if (!swipeStart) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - swipeStart.x;
+        const dy = t.clientY - swipeStart.y;
+        swipeStart = null;
+        if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+            lastSwipeTime = Date.now();
+            showSlide(slideshowIndex + (dx < 0 ? 1 : -1));
+        }
+    });
+
+    // Capture phase so these keys never reach the editor while presenting
+    document.addEventListener('keydown', (e) => {
+        if (!slideshowOpen || videoModal.style.display !== 'none') return;
+        if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) showSlide(slideshowIndex + 1);
+        else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) showSlide(slideshowIndex - 1);
+        else if (e.key === 'Home') showSlide(0);
+        else if (e.key === 'End') showSlide(keynoteDoc.slides.length - 1);
+        else if (e.key === 'Escape') closeSlideshow();
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+
+    // Leaving fullscreen (Esc is handled by the browser there) also ends the presentation
+    const onFullscreenChange = () => {
+        if (fullscreenElement()) renderSlideshow();
+        else closeSlideshow();
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    window.addEventListener('resize', () => {
+        if (slideshowOpen) requestAnimationFrame(renderSlideshow);
     });
 
     const toolEraser = document.getElementById('toolEraser');
