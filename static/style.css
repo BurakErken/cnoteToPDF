@@ -37,6 +37,7 @@ body {
     background-color: var(--bg-color);
     color: var(--text-color);
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     transition: background-color 0.3s ease, color 0.3s ease;
 }
@@ -47,6 +48,7 @@ body {
     justify-content: center;
     align-items: center;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
     background: linear-gradient(135deg, rgba(52, 152, 219, 0.1) 0%, rgba(155, 89, 182, 0.1) 100%);
     position: absolute;
@@ -131,6 +133,7 @@ body {
 .app-container {
     display: flex;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
 }
 
@@ -156,6 +159,16 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+
+.sidebar-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.sidebar-backdrop {
+    display: none;
 }
 
 .page-list {
@@ -328,7 +341,9 @@ input[type="range"] {
     flex: 1;
     overflow: auto;
     /* Both scrollbars native and automatic */
-    padding: 0;
+    /* Flex + the page's auto margins: centred while smaller than the area, scrollable when larger */
+    display: flex;
+    padding: 1.5rem;
     min-width: 0;
     min-height: 0;
     position: relative;
@@ -711,25 +726,54 @@ body.dark-mode .inline-text-editor {
     display: none;
 }
 
-@media (max-width: 768px) {
+/* Narrow screens, and short ones such as a phone held sideways */
+@media (max-width: 768px), (max-height: 500px) {
     .mobile-only {
         display: inline-flex;
     }
 
-    /* Fixed, hidden-by-default sidebar */
+    /* Fixed, hidden-by-default sidebar (opaque, above the zoom controls) */
     .sidebar {
         position: fixed;
         left: -100%;
         top: 0;
         height: 100vh;
+        height: 100dvh;
         width: 260px;
-        z-index: 1000;
+        max-width: 85vw;
+        z-index: 1002;
+        background: var(--bg-color);
         transition: left 0.3s ease;
         box-shadow: 5px 0 25px rgba(0, 0, 0, 0.2);
     }
 
     .sidebar.open {
         left: 0;
+    }
+
+    .sidebar-backdrop.show {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        z-index: 1001;
+    }
+
+    .sidebar-title {
+        padding: 0.75rem 0.75rem 0.75rem 1.5rem;
+    }
+
+    /* iOS zooms the page when a control with text under 16px is focused */
+    .styled-select,
+    .zoom-input {
+        font-size: 16px;
+    }
+
+    /* No double-tap zoom when tapping buttons quickly */
+    button,
+    .page-list li,
+    .gallery-item {
+        touch-action: manipulation;
     }
 
     /* Drop Zone Scale Down */
@@ -760,6 +804,24 @@ body.dark-mode .inline-text-editor {
 
     .canvas-zoom-layer {
         padding: 1rem;
+    }
+
+    .canvas-container-wrapper {
+        padding: 0.75rem;
+    }
+
+    /* Keep the menu, slideshow and PDF buttons at the start of the scrolling toolbar */
+    #mobileMenuBtn {
+        order: -2;
+    }
+
+    .toolbar .ml-auto {
+        order: -1;
+        margin-left: 0;
+    }
+
+    .slideshow-controls {
+        bottom: 0.75rem;
     }
 
     /* Keep zoom controls out of the way */

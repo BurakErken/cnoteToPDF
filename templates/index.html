@@ -35,10 +35,16 @@
     <!-- Ana Uygulama Arayüzü -->
     <div id="appContainer" class="app-container" style="display: none;">
 
+        <!-- Mobilde açık menünün arkası: dokununca menü kapanır -->
+        <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
         <!-- Sol Menü -->
         <aside class="sidebar">
-            <div class="sidebar-header">
+            <div class="sidebar-header sidebar-title">
                 <h3><i class="fa-solid fa-book-open"></i> Sayfalar</h3>
+                <button id="sidebarCloseBtn" class="tool-btn mobile-only" title="Menüyü Kapat">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
             </div>
             <ul id="pageList" class="page-list">
                 <!-- Sayfalar buraya dinamik eklenecek -->

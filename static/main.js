@@ -8,11 +8,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const mobileMenuBtn = document.getElementById('mobileMenuBtn');
     const sidebar = document.querySelector('.sidebar');
 
+    const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+
+    // Mobile menu: opened by the menu button, closed by its ✕, by tapping beside it or Esc
+    function setSidebarOpen(open) {
+        sidebar.classList.toggle('open', open);
+        sidebarBackdrop.classList.toggle('show', open);
+    }
+
     if (mobileMenuBtn) {
         mobileMenuBtn.addEventListener('click', () => {
-            sidebar.classList.toggle('open');
+            setSidebarOpen(!sidebar.classList.contains('open'));
         });
     }
+    document.getElementById('sidebarCloseBtn').addEventListener('click', () => setSidebarOpen(false));
+    sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && sidebar.classList.contains('open')) setSidebarOpen(false);
+    });
 
     // Canvas & Settings Elements
     const canvasContainer = document.getElementById('canvasWrapper');
@@ -124,6 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 renderPageList();
                 loadPage(0);
+                fitPageToWindow();
             })
             .catch(error => {
                 loadingOverlay.style.display = 'none';
@@ -186,11 +200,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // Zooms so the whole page width is visible (never above 100%)
     function fitPageToWindow() {
         const wrapper = document.querySelector('.canvas-container-wrapper');
-        const available = wrapper.clientWidth - 32;
-        if (available <= 0) return;
-        const percent = Math.floor(Math.min(100, available / pageFormat.baseW * 100) / 5) * 5;
+        const style = getComputedStyle(wrapper);
+        // Leave room for the padding and a scrollbar that may appear
+        const availableW = wrapper.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 16;
+        const availableH = wrapper.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - 16;
+        if (availableW <= 0) return;
+        let ratio = availableW / pageFormat.baseW;
+        // Landscape pages (slides) are shown whole; portrait pages fill the width and scroll
+        if (pageFormat.baseW > pageFormat.baseH && availableH > 0) {
+            ratio = Math.min(ratio, availableH / pageFormat.baseH);
+        }
+        const percent = Math.floor(Math.min(100, ratio * 100));
         applyZoom(Math.max(10, percent));
+        autoFit = true;
     }
+
+    // True while the zoom was picked by fitPageToWindow, so it follows window/rotation changes
+    let autoFit = false;
+    window.addEventListener('resize', () => {
+        if (autoFit && appContainer.style.display !== 'none') fitPageToWindow();
+    });
 
     function setPaper(paperClass) {
         document.body.classList.remove('paper-blank', 'paper-lined', 'paper-grid');
@@ -232,9 +261,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             li.addEventListener('click', () => {
                 loadPage(index);
-                // Mobil cihazlarda sayfa seçilince menüyü kapat
-                if (window.innerWidth <= 768 && sidebar) {
-                    sidebar.classList.remove('open');
+                // Mobil cihazlarda sayfa seçilince menüyü kapat (style.css ile aynı ölçüt)
+                if (window.matchMedia('(max-width: 768px), (max-height: 500px)').matches && sidebar) {
+                    setSidebarOpen(false);
                 }
             });
             pageList.appendChild(li);
@@ -1223,15 +1252,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     zoomInput.addEventListener('change', (e) => {
+        autoFit = false;
         applyZoom(parseInt(e.target.value) || 100);
     });
 
     zoomInBtn.addEventListener('click', () => {
+        autoFit = false;
         const currentVal = parseInt(zoomInput.value) || 100;
         applyZoom(currentVal + 5);
     });
 
     zoomOutBtn.addEventListener('click', () => {
+        autoFit = false;
         const currentVal = parseInt(zoomInput.value) || 100;
         applyZoom(currentVal - 5);
     });
