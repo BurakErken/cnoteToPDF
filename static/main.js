@@ -22,17 +22,38 @@ document.addEventListener('DOMContentLoaded', () => {
     const thicknessVal = document.getElementById('thicknessVal');
     const themeSelect = document.getElementById('themeSelect');
     const paperSelect = document.getElementById('paperSelect');
+    const pageFormatSelect = document.getElementById('pageFormatSelect');
     const exportPdfBtn = document.getElementById('exportPdfBtn');
 
     // State
     let pagesData = [];
     let currentPageIndex = 0;
+    let keynoteDoc = null; // Open Keynote presentation (.key files are read in the browser)
 
-    // Virtual Dimensions (A4 Proportion)
-    const CANVAS_WIDTH = 2000;
-    const CANVAS_HEIGHT = 2828;
-    canvas.width = CANVAS_WIDTH;
-    canvas.height = CANVAS_HEIGHT;
+    // Page formats: canvas resolution and on-screen size at 100% zoom
+    const PAGE_FORMATS = {
+        'a4-portrait': { width: 2000, height: 2828, baseW: 794, baseH: 1123 },
+        '16x9': { width: 2560, height: 1440, baseW: 1123, baseH: 632 },
+        '4x3': { width: 2400, height: 1800, baseW: 1000, baseH: 750 }
+    };
+    let pageFormat = PAGE_FORMATS['a4-portrait'];
+    canvas.width = pageFormat.width;
+    canvas.height = pageFormat.height;
+
+    // CNote pages use a 1404x1984 logical page
+    const CNOTE_WIDTH = 1404;
+    const CNOTE_HEIGHT = 1984;
+
+    // Scales a srcW x srcH page to fit the canvas, centred
+    function contentFit(srcW, srcH) {
+        const scale = Math.min(canvas.width / srcW, canvas.height / srcH);
+        return { scale, x: (canvas.width - srcW * scale) / 2, y: (canvas.height - srcH * scale) / 2 };
+    }
+
+    function isKeynotePage() {
+        const page = pagesData[currentPageIndex];
+        return !!(page && page.type === 'key' && keynoteDoc);
+    }
 
     // --- Drag & Drop Handlers ---
     dropZone.addEventListener('dragover', (e) => {
@@ -59,9 +80,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function handleFileUpload(file) {
-        if (!file.name.endsWith('.cnote') && !file.name.endsWith('.zip')) {
-            alert('Lütfen geçerli bir .cnote veya .zip dosyası yükleyin.');
+    async function handleFileUpload(file) {
+        const name = file.name.toLowerCase();
+        if (name.endsWith('.key') || (name.endsWith('.zip') && await KeynoteReader.looksLikeKeynote(file))) {
+            openKeynote(file);
+            return;
+        }
+        if (!name.endsWith('.cnote') && !name.endsWith('.zip')) {
+            alert('Lütfen geçerli bir .cnote, .key veya .zip dosyası yükleyin.');
             return;
         }
 
@@ -82,11 +108,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
 
-                pagesData = data.pages;
-                if (pagesData.length === 0) {
+                if (data.pages.length === 0) {
                     alert('Dosya içinde çözümlenebilecek (.cpage) sayfa bulunamadı.');
                     return;
                 }
+                closeKeynote();
+                pagesData = data.pages;
+                currentPageIndex = 0;
+                setPageFormat('a4-portrait');
 
                 // Show App, Hide Dropzone
                 dropZone.style.display = 'none';
@@ -102,12 +131,102 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
+    // Keynote files never leave the browser: they are parsed and drawn locally.
+    async function openKeynote(file) {
+        loadingOverlay.style.display = 'flex';
+        try {
+            const doc = await KeynoteReader.open(file);
+            closeKeynote();
+            keynoteDoc = doc;
+            doc.onChange = () => {
+                isBgCached = false;
+                drawCanvas();
+            };
+            pagesData = doc.slides.map((slide, i) => ({ type: 'key', slideIndex: i, points: [], images: [] }));
+            currentPageIndex = 0;
+
+            const ratio = doc.width / doc.height;
+            setPageFormat(ratio < 1 ? 'a4-portrait' : Math.abs(ratio - 4 / 3) < 0.05 ? '4x3' : '16x9');
+            setPaper('paper-blank');
+
+            dropZone.style.display = 'none';
+            appContainer.style.display = 'flex';
+            renderPageList();
+            loadPage(0);
+            fitPageToWindow();
+        } catch (error) {
+            console.error('Keynote error:', error);
+            alert('Keynote dosyası açılamadı: ' + error.message);
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    function closeKeynote() {
+        if (keynoteDoc) keynoteDoc.dispose();
+        keynoteDoc = null;
+    }
+
+    function setPageFormat(key) {
+        if (!PAGE_FORMATS[key]) key = 'a4-portrait';
+        pageFormat = PAGE_FORMATS[key];
+        pageFormatSelect.value = key;
+        if (canvas.width !== pageFormat.width || canvas.height !== pageFormat.height) {
+            canvas.width = pageFormat.width;
+            canvas.height = pageFormat.height;
+        }
+        isBgCached = false;
+        applyZoom(parseInt(zoomInput.value) || 100);
+        drawCanvas();
+    }
+
+    // Zooms so the whole page width is visible (never above 100%)
+    function fitPageToWindow() {
+        const wrapper = document.querySelector('.canvas-container-wrapper');
+        const available = wrapper.clientWidth - 32;
+        if (available <= 0) return;
+        const percent = Math.floor(Math.min(100, available / pageFormat.baseW * 100) / 5) * 5;
+        applyZoom(Math.max(10, percent));
+    }
+
+    function setPaper(paperClass) {
+        document.body.classList.remove('paper-blank', 'paper-lined', 'paper-grid');
+        document.body.classList.add(paperClass);
+        paperSelect.value = paperClass;
+    }
+
+    // Converts a canvas position into Keynote slide points
+    function toSlidePoint(pos) {
+        const fit = contentFit(keynoteDoc.width, keynoteDoc.height);
+        return { x: (pos.x - fit.x) / fit.scale, y: (pos.y - fit.y) / fit.scale };
+    }
+
     // --- UI Render & Interaction ---
     function renderPageList() {
         pageList.innerHTML = '';
         pagesData.forEach((page, index) => {
             const li = document.createElement('li');
-            li.innerHTML = `<i class="fa-solid fa-file-signature"></i> Sayfa ${index + 1} <small style="opacity:0.6;margin-left:auto;">(${page.points.length} nk)</small>`;
+            if (page.type === 'key') {
+                li.classList.add('slide-item');
+                const thumb = document.createElement('img');
+                thumb.className = 'slide-thumb';
+                thumb.alt = '';
+                keynoteDoc.thumbnailURL(page.slideIndex).then(url => {
+                    if (url) thumb.src = url;
+                }).catch(() => {});
+                const label = document.createElement('span');
+                label.className = 'slide-label';
+                label.textContent = `Slayt ${index + 1}`;
+                const title = keynoteDoc.slideTitle(page.slideIndex);
+                if (title) {
+                    const small = document.createElement('small');
+                    small.textContent = title;
+                    label.appendChild(small);
+                }
+                li.append(thumb, label);
+            } else {
+                li.innerHTML = `<i class="fa-solid fa-file-signature"></i> Sayfa ${index + 1} <small style="opacity:0.6;margin-left:auto;">(${page.points.length} nk)</small>`;
+            }
             li.addEventListener('click', () => {
                 loadPage(index);
                 // Mobil cihazlarda sayfa seçilince menüyü kapat
@@ -135,9 +254,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const galleryHeader = document.getElementById('galleryHeader');
         if (gallery && galleryHeader) {
             gallery.innerHTML = '';
+            galleryToken++;
+            document.getElementById('galleryTitle').textContent =
+                pagesData[index].type === 'key' ? 'Slayttaki Medya' : 'Sayfa Resimleri';
 
             const pageImages = pagesData[index].images || [];
-            if (pageImages.length > 0) {
+            if (pagesData[index].type === 'key') {
+                gallery.style.display = 'none';
+                galleryHeader.style.display = 'none';
+                renderKeynoteGallery(index, galleryToken, gallery, galleryHeader);
+            } else if (pageImages.length > 0) {
                 gallery.style.display = 'grid';
                 galleryHeader.style.display = 'block';
 
@@ -167,6 +293,70 @@ document.addEventListener('DOMContentLoaded', () => {
 
         drawCanvas();
     }
+
+    // --- Keynote media (sidebar gallery + video player) ---
+    let galleryToken = 0;
+
+    async function renderKeynoteGallery(index, token, gallery, galleryHeader) {
+        let media;
+        try {
+            media = await keynoteDoc.slideMedia(pagesData[index].slideIndex);
+        } catch (error) {
+            console.warn('Slide media error:', error);
+            return;
+        }
+        if (token !== galleryToken || !media.length) return;
+
+        gallery.style.display = 'grid';
+        galleryHeader.style.display = 'block';
+        media.forEach(item => {
+            const cell = document.createElement('div');
+            cell.className = 'gallery-item';
+            cell.title = item.name;
+            const thumb = document.createElement('img');
+            thumb.className = 'gallery-thumbnail';
+            if (item.thumb) thumb.src = item.thumb;
+            cell.appendChild(thumb);
+            if (item.kind === 'movie') {
+                const icon = document.createElement('i');
+                icon.className = 'fa-solid fa-circle-play gallery-play';
+                cell.appendChild(icon);
+                cell.onclick = () => openVideo(item.url, item.name);
+            } else {
+                cell.onclick = () => {
+                    const w = window.open("");
+                    w.document.write(`<img src="${item.url}" style="max-width:100%;">`);
+                };
+            }
+            gallery.appendChild(cell);
+        });
+    }
+
+    const videoModal = document.getElementById('videoModal');
+    const videoPlayer = document.getElementById('videoPlayer');
+
+    function openVideo(url, name) {
+        if (!url) return;
+        document.getElementById('videoModalTitle').textContent = name || 'Video';
+        videoPlayer.src = url;
+        videoModal.style.display = 'flex';
+        videoPlayer.play().catch(() => {});
+    }
+
+    function closeVideo() {
+        videoPlayer.pause();
+        videoPlayer.removeAttribute('src');
+        videoPlayer.load();
+        videoModal.style.display = 'none';
+    }
+
+    document.getElementById('videoModalClose').addEventListener('click', closeVideo);
+    videoModal.addEventListener('click', (e) => {
+        if (e.target === videoModal) closeVideo();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && videoModal.style.display !== 'none') closeVideo();
+    });
 
     const toolEraser = document.getElementById('toolEraser');
     const toolText = document.getElementById('toolText');
@@ -526,6 +716,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 draggedItem = null;
                 isDragging = false;
                 updateToolbarVisibility();
+
+                // Clicking a video on a Keynote slide plays it
+                if (isKeynotePage()) {
+                    const sp = toSlidePoint(pos);
+                    keynoteDoc.movieAt(pagesData[currentPageIndex].slideIndex, sp.x, sp.y)
+                        .then(movie => { if (movie) openVideo(movie.url, movie.name); })
+                        .catch(error => console.warn('Video error:', error));
+                }
             }
             return;
         }
@@ -613,7 +811,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 }
-                canvas.style.cursor = hover ? 'grab' : 'default';
+                let overVideo = false;
+                if (!hover && isKeynotePage()) {
+                    const sp = toSlidePoint(pos);
+                    overVideo = keynoteDoc.isOverMovie(pagesData[currentPageIndex].slideIndex, sp.x, sp.y);
+                }
+                canvas.style.cursor = hover ? 'grab' : overVideo ? 'pointer' : 'default';
             }
             return;
         }
@@ -742,6 +945,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function drawCanvas() {
         if (!pagesData || pagesData.length === 0) return;
+        const page = pagesData[currentPageIndex];
+        if (!page) return;
 
         // Clear entire canvas
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -752,26 +957,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const isDarkMode = document.body.classList.contains('dark-mode');
         ctx.fillStyle = isDarkMode ? '#f0f0f0' : '#111';
 
-        // 1. Draw CNote Base Points
+        // 1. Draw CNote Base Points (or the Keynote slide)
         const currentThemeMode = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+        const isKey = isKeynotePage();
+        const fit = isKey ? contentFit(keynoteDoc.width, keynoteDoc.height) : contentFit(CNOTE_WIDTH, CNOTE_HEIGHT);
 
-        if (!isBgCached || cachedPageIndex !== currentPageIndex || cachedThickness !== size || cachedThemeMode !== currentThemeMode) {
+        if (!isBgCached || cachedPageIndex !== currentPageIndex ||
+            (!isKey && (cachedThickness !== size || cachedThemeMode !== currentThemeMode))) {
             bgCacheCanvas.width = canvas.width;
             bgCacheCanvas.height = canvas.height;
             bgCacheCtx.clearRect(0, 0, bgCacheCanvas.width, bgCacheCanvas.height);
             bgCacheCtx.fillStyle = isDarkMode ? '#f0f0f0' : '#111';
 
-            const points = pagesData[currentPageIndex].points;
+            if (isKey) {
+                keynoteDoc.render(bgCacheCtx, page.slideIndex, fit.x, fit.y, fit.scale);
+            } else {
+                const points = page.points;
 
-            // CNote logical canvas is typically around 1404x1984. We scale it up to our 2000x2828 canvas.
-            const strokeScaleX = canvas.width / 1404;
-            const strokeScaleY = canvas.height / 1984;
-
-            // Draw small rectangles instead of massive complex curved paths for extreme performance
-            for (let i = 0; i < points.length; i++) {
-                let px = points[i][0] * strokeScaleX;
-                let py = points[i][1] * strokeScaleY;
-                bgCacheCtx.fillRect(px - size, py - size, size * 2, size * 2);
+                // Draw small rectangles instead of massive complex curved paths for extreme performance
+                for (let i = 0; i < points.length; i++) {
+                    let px = fit.x + points[i][0] * fit.scale;
+                    let py = fit.y + points[i][1] * fit.scale;
+                    bgCacheCtx.fillRect(px - size, py - size, size * 2, size * 2);
+                }
             }
 
             cachedPageIndex = currentPageIndex;
@@ -781,14 +989,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Draw Embedded Images FIRST (Under everything)
-        const pageImages = pagesData[currentPageIndex].images || [];
+        const pageImages = page.images || [];
+        const pageW = CNOTE_WIDTH * fit.scale, pageH = CNOTE_HEIGHT * fit.scale;
         pageImages.forEach(imgData => {
             if (imgData.htmlImage && imgData.htmlImage.complete) {
                 // The bounds provided by parser are normalized relative to the page (0.0 - 1.0)
-                const x = imgData.rel_x !== undefined ? imgData.rel_x * canvas.width : imgData.x;
-                const y = imgData.rel_y !== undefined ? imgData.rel_y * canvas.height : imgData.y;
-                const w = imgData.rel_w !== undefined ? imgData.rel_w * canvas.width : imgData.width;
-                const h = imgData.rel_h !== undefined ? imgData.rel_h * canvas.height : imgData.height;
+                const x = imgData.rel_x !== undefined ? fit.x + imgData.rel_x * pageW : imgData.x;
+                const y = imgData.rel_y !== undefined ? fit.y + imgData.rel_y * pageH : imgData.y;
+                const w = imgData.rel_w !== undefined ? imgData.rel_w * pageW : imgData.width;
+                const h = imgData.rel_h !== undefined ? imgData.rel_h * pageH : imgData.height;
 
                 ctx.drawImage(imgData.htmlImage, x, y, w, h);
             }
@@ -843,10 +1052,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const zoomLayer = document.getElementById('zoomLayer');
 
     // --- Zoom Logic ---
-    // A4 base dimensions in CSS pixels
-    const BASE_W = 794;
-    const BASE_H = 1123;
-
+    // Page base dimensions in CSS pixels come from the selected page format
     function applyZoom(percent) {
         if (percent < 10) percent = 10;
         if (percent > 500) percent = 500;
@@ -855,8 +1061,8 @@ document.addEventListener('DOMContentLoaded', () => {
         currentScale = percent / 100;
 
         // Resize the container div itself — no CSS transform, native scrollbars just work
-        const newW = Math.round(BASE_W * currentScale);
-        const newH = Math.round(BASE_H * currentScale);
+        const newW = Math.round(pageFormat.baseW * currentScale);
+        const newH = Math.round(pageFormat.baseH * currentScale);
 
         canvasContainer.style.width = newW + 'px';
         canvasContainer.style.height = newH + 'px';
@@ -897,6 +1103,11 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.classList.add(e.target.value);
     });
 
+    pageFormatSelect.addEventListener('change', (e) => {
+        setPageFormat(e.target.value);
+        fitPageToWindow();
+    });
+
     // --- PDF Export Logic ---
     exportPdfBtn.addEventListener('click', async () => {
         const originalBtnText = exportPdfBtn.innerHTML;
@@ -922,17 +1133,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const imgData = canvasImage.toDataURL('image/jpeg', 1.0);
             const { jsPDF } = window.jspdf;
+            // Landscape pages are 297 mm wide with a height that keeps the page's aspect ratio
+            const landscape = canvas.width > canvas.height;
             const pdf = new jsPDF({
-                orientation: 'portrait',
+                orientation: landscape ? 'landscape' : 'portrait',
                 unit: 'mm',
-                format: 'a4'
+                format: landscape ? [297, 297 * canvasImage.height / canvasImage.width] : 'a4'
             });
 
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (canvasImage.height * pdfWidth) / canvasImage.width;
 
             pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-            pdf.save(`CollaNote_Sayfa_${currentPageIndex + 1}.pdf`);
+            pdf.save(isKeynotePage() ? `Slayt_${currentPageIndex + 1}.pdf` : `CollaNote_Sayfa_${currentPageIndex + 1}.pdf`);
 
         } catch (error) {
             console.error('PDF Export Error:', error);

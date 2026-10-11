@@ -15,3 +15,5 @@ inspect_out2.txt
 inspect_out3.txt
 check_images.py
 script.py
+*.key
+.~lock.*#
