@@ -26,10 +26,12 @@
             <input type="file" id="fileInput" accept=".cnote,.key,.zip" style="display: none;">
             <button class="btn primary-btn" onclick="document.getElementById('fileInput').click()">Dosya Seç</button>
         </div>
-        <div class="loading-overlay" id="loadingOverlay" style="display: none;">
-            <div class="spinner"></div>
-            <p>İşleniyor, lütfen bekleyin...</p>
-        </div>
+    </div>
+
+    <!-- Dosya açılırken (başlangıç ekranında da, açık uygulamada da) -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="spinner"></div>
+        <p>İşleniyor, lütfen bekleyin...</p>
     </div>
 
     <!-- Ana Uygulama Arayüzü -->
@@ -60,6 +62,13 @@
 
         <!-- Sağ Taraf (Canvas ve Kontroller) -->
         <main class="main-content">
+            <!-- Açık dosyalar: her dosya kendi sekmesinde -->
+            <nav id="docTabs" class="doc-tabs" aria-label="Açık dosyalar">
+                <button id="openFileBtn" class="doc-open-btn" title="Başka bir dosyayı yeni sekmede aç">
+                    <i class="fa-solid fa-folder-open"></i> Dosya Aç
+                </button>
+            </nav>
+
             <header class="toolbar glass-panel">
                 <!-- Mobil Menü Butonu (Yalnızca küçük ekranlarda görünür) -->
                 <button id="mobileMenuBtn" class="tool-btn mobile-only" title="Menü">
@@ -161,7 +170,11 @@
     </div>
 
     <!-- Zoom Controls (Fixed to viewport, never scrolls away) -->
-    <div class="floating-zoom-controls glass-panel">
+    <div id="floatingControls" class="floating-zoom-controls glass-panel" style="display: none;">
+        <button id="prevPageBtn" class="tool-btn" title="Önceki sayfa (←)"><i class="fa-solid fa-chevron-left"></i></button>
+        <span id="pageIndicator" class="page-indicator">1 / 1</span>
+        <button id="nextPageBtn" class="tool-btn" title="Sonraki sayfa (→)"><i class="fa-solid fa-chevron-right"></i></button>
+        <span class="floating-divider"></span>
         <button id="zoomOutBtn" class="tool-btn" title="Uzaklaştır"><i class="fa-solid fa-minus"></i></button>
         <input type="number" id="zoomInput" class="zoom-input" value="100" min="10" max="500" step="5"
             title="Özel Değer %">
@@ -176,6 +189,9 @@
             <button id="slideshowPrev" class="slideshow-btn" title="Önceki (←)"><i class="fa-solid fa-chevron-left"></i></button>
             <span id="slideshowCounter">1 / 1</span>
             <button id="slideshowNext" class="slideshow-btn" title="Sonraki (→)"><i class="fa-solid fa-chevron-right"></i></button>
+            <button id="slideshowRotate" class="slideshow-btn slideshow-rotate" title="Yatay / dikey görünüm">
+                <i class="fa-solid fa-rotate"></i><span>Yatay</span>
+            </button>
             <button id="slideshowExit" class="slideshow-btn" title="Çık (Esc)"><i class="fa-solid fa-xmark"></i></button>
         </div>
     </div>

@@ -38,14 +38,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const pageFormatSelect = document.getElementById('pageFormatSelect');
     const exportPdfBtn = document.getElementById('exportPdfBtn');
 
-    // State
+    // State of the document on screen (every opened file has its own tab, see "Document tabs")
     let pagesData = [];
     let currentPageIndex = 0;
     let keynoteDoc = null; // Open Keynote presentation (.key files are read in the browser)
     let currentFileBase = 'CollaNote'; // Open file's name without extension, used for PDF names
 
-    function setCurrentFile(file) {
-        currentFileBase = file.name.replace(/\.[^.]*$/, '').replace(/\.+$/, '').trim() || 'Belge';
+    function fileBaseOf(file) {
+        return file.name.replace(/\.[^.]*$/, '').replace(/\.+$/, '').trim() || 'Belge';
     }
 
     // Page formats: canvas resolution and on-screen size at 100% zoom
@@ -93,8 +93,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFileUpload(e.target.files[0]);
+        const file = e.target.files[0];
+        // Reset so choosing the same file again still opens it
+        e.target.value = '';
+        if (file) handleFileUpload(file);
+    });
+
+    // Files dropped on the open app open in a new tab
+    appContainer.addEventListener('dragover', (e) => {
+        if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
+    });
+    appContainer.addEventListener('drop', (e) => {
+        if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+            e.preventDefault();
+            handleFileUpload(e.dataTransfer.files[0]);
         }
     });
 
@@ -130,20 +142,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     alert('Dosya içinde çözümlenebilecek (.cpage) sayfa bulunamadı.');
                     return;
                 }
-                closeKeynote();
-                setCurrentFile(file);
-                pagesData = data.pages;
-                currentPageIndex = 0;
-                setPageFormat('a4-portrait');
-                slideshowBtn.style.display = 'none';
-
-                // Show App, Hide Dropzone
-                dropZone.style.display = 'none';
-                appContainer.style.display = 'flex';
-
-                renderPageList();
-                loadPage(0);
-                fitPageToWindow();
+                addDocument({
+                    kind: 'cnote',
+                    fileBase: fileBaseOf(file),
+                    pagesData: data.pages,
+                    keynoteDoc: null,
+                    format: 'a4-portrait',
+                    paper: paperSelect.value
+                });
             })
             .catch(error => {
                 loadingOverlay.style.display = 'none';
@@ -157,27 +163,21 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingOverlay.style.display = 'flex';
         try {
             const doc = await KeynoteReader.open(file);
-            closeKeynote();
-            setCurrentFile(file);
-            keynoteDoc = doc;
             doc.onChange = () => {
+                if (keynoteDoc !== doc) return; // only the tab on screen redraws
                 isBgCached = false;
                 if (slideshowOpen) renderSlideshow();
                 else drawCanvas();
             };
-            pagesData = doc.slides.map((slide, i) => ({ type: 'key', slideIndex: i, points: [], images: [] }));
-            currentPageIndex = 0;
-
             const ratio = doc.width / doc.height;
-            setPageFormat(ratio < 1 ? 'a4-portrait' : Math.abs(ratio - 4 / 3) < 0.05 ? '4x3' : '16x9');
-            setPaper('paper-blank');
-            slideshowBtn.style.display = '';
-
-            dropZone.style.display = 'none';
-            appContainer.style.display = 'flex';
-            renderPageList();
-            loadPage(0);
-            fitPageToWindow();
+            addDocument({
+                kind: 'key',
+                fileBase: fileBaseOf(file),
+                pagesData: doc.slides.map((slide, i) => ({ type: 'key', slideIndex: i, points: [], images: [] })),
+                keynoteDoc: doc,
+                format: ratio < 1 ? 'a4-portrait' : Math.abs(ratio - 4 / 3) < 0.05 ? '4x3' : '16x9',
+                paper: 'paper-blank'
+            });
         } catch (error) {
             console.error('Keynote error:', error);
             alert('Keynote dosyası açılamadı: ' + error.message);
@@ -186,9 +186,126 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function closeKeynote() {
-        if (keynoteDoc) keynoteDoc.dispose();
+    // --- Document tabs: every opened file stays open in its own tab ---
+    const docTabs = document.getElementById('docTabs');
+    const openFileBtn = document.getElementById('openFileBtn');
+    const floatingControls = document.getElementById('floatingControls');
+    const openDocs = [];
+    let activeDocument = null;
+
+    openFileBtn.addEventListener('click', () => fileInput.click());
+
+    // Keeps what is on screen (page, notes, format, zoom) in the active document
+    function storeActiveDocument() {
+        const doc = activeDocument;
+        if (!doc) return;
+        if (activeTextEditor) finalizeTextEditor();
+        if (annotatedPage) annotatedPage.annotations = { drawings: userDrawings, images: userImages, texts: userTexts };
+        doc.currentPageIndex = currentPageIndex;
+        doc.format = pageFormatSelect.value;
+        doc.paper = paperSelect.value;
+        doc.zoom = parseInt(zoomInput.value) || 100;
+        doc.autoFit = autoFit;
+    }
+
+    function addDocument(doc) {
+        doc.currentPageIndex = 0;
+        doc.autoFit = true;
+        openDocs.push(doc);
+        showDocument(doc);
+    }
+
+    function showDocument(doc) {
+        if (activeDocument && activeDocument !== doc) storeActiveDocument();
+        activeDocument = doc;
+        pagesData = doc.pagesData;
+        keynoteDoc = doc.keynoteDoc;
+        currentFileBase = doc.fileBase;
+        currentPageIndex = doc.currentPageIndex;
+        // loadPage brings in this document's own notes
+        annotatedPage = null;
+        userDrawings = [];
+        userImages = [];
+        userTexts = [];
+
+        dropZone.style.display = 'none';
+        appContainer.style.display = 'flex';
+        floatingControls.style.display = '';
+        slideshowBtn.style.display = doc.kind === 'key' ? '' : 'none';
+        setPaper(doc.paper);
+        setPageFormat(doc.format);
+        renderPageList();
+        loadPage(doc.currentPageIndex);
+        if (doc.autoFit) {
+            fitPageToWindow();
+        } else {
+            autoFit = false;
+            applyZoom(doc.zoom);
+        }
+        renderDocTabs();
+    }
+
+    function closeDocument(doc) {
+        const index = openDocs.indexOf(doc);
+        if (index < 0) return;
+        openDocs.splice(index, 1);
+        if (doc.keynoteDoc) doc.keynoteDoc.dispose();
+        if (doc !== activeDocument) {
+            renderDocTabs();
+            return;
+        }
+        activeDocument = null;
+        const next = openDocs[index] || openDocs[index - 1];
+        if (next) {
+            showDocument(next);
+            return;
+        }
+        // Last tab closed: back to the start screen
+        if (activeTextEditor) finalizeTextEditor();
+        pagesData = [];
         keynoteDoc = null;
+        annotatedPage = null;
+        userDrawings = [];
+        userImages = [];
+        userTexts = [];
+        appContainer.style.display = 'none';
+        floatingControls.style.display = 'none';
+        dropZone.style.display = '';
+        renderDocTabs();
+    }
+
+    function renderDocTabs() {
+        docTabs.querySelectorAll('.doc-tab').forEach(el => el.remove());
+        openDocs.forEach(doc => {
+            const tab = document.createElement('div');
+            tab.className = 'doc-tab' + (doc === activeDocument ? ' active' : '');
+            tab.title = doc.fileBase;
+            const icon = document.createElement('i');
+            icon.className = doc.kind === 'key' ? 'fa-solid fa-person-chalkboard' : 'fa-solid fa-file-signature';
+            const label = document.createElement('span');
+            label.textContent = doc.fileBase;
+            const close = document.createElement('button');
+            close.className = 'doc-tab-close';
+            close.title = 'Sekmeyi kapat';
+            close.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+            close.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeDocument(doc);
+            });
+            tab.addEventListener('click', () => {
+                if (doc !== activeDocument) showDocument(doc);
+            });
+            tab.append(icon, label, close);
+            docTabs.insertBefore(tab, openFileBtn);
+        });
+        // Keep the active tab in view
+        const active = docTabs.querySelector('.doc-tab.active');
+        if (active) {
+            const left = active.offsetLeft;
+            const right = left + active.offsetWidth + openFileBtn.offsetWidth;
+            if (left < docTabs.scrollLeft) docTabs.scrollLeft = left - 8;
+            else if (right > docTabs.scrollLeft + docTabs.clientWidth) docTabs.scrollLeft = right - docTabs.clientWidth + 8;
+        }
     }
 
     function setPageFormat(key) {
@@ -302,6 +419,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (i === index) li.classList.add('active');
             else li.classList.remove('active');
         });
+        keepActivePageInView();
+        updatePageNav();
 
         // Load images into gallery and create Image objects for canvas
         const gallery = document.getElementById('imageGallery');
@@ -347,6 +466,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
         drawCanvas();
     }
+
+    // --- Page navigation (floating bar and arrow keys) ---
+    const prevPageBtn = document.getElementById('prevPageBtn');
+    const nextPageBtn = document.getElementById('nextPageBtn');
+    const pageIndicator = document.getElementById('pageIndicator');
+
+    function updatePageNav() {
+        pageIndicator.textContent = `${currentPageIndex + 1} / ${pagesData.length}`;
+        prevPageBtn.disabled = currentPageIndex <= 0;
+        nextPageBtn.disabled = currentPageIndex >= pagesData.length - 1;
+    }
+
+    // Scrolls the page list (even while the mobile menu is hidden) so the active page is visible
+    function keepActivePageInView() {
+        const li = pageList.children[currentPageIndex];
+        if (!li) return;
+        const lr = li.getBoundingClientRect();
+        const pr = pageList.getBoundingClientRect();
+        if (lr.top < pr.top) pageList.scrollTop -= pr.top - lr.top + 8;
+        else if (lr.bottom > pr.bottom) pageList.scrollTop += lr.bottom - pr.bottom + 8;
+    }
+
+    prevPageBtn.addEventListener('click', () => loadPage(currentPageIndex - 1));
+    nextPageBtn.addEventListener('click', () => loadPage(currentPageIndex + 1));
+
+    document.addEventListener('keydown', (e) => {
+        if (appContainer.style.display === 'none' || slideshowOpen) return;
+        if (pdfModal.style.display !== 'none' || videoModal.style.display !== 'none') return;
+        const target = e.target;
+        if (target.closest && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        if (e.key === 'ArrowRight' || e.key === 'PageDown') loadPage(currentPageIndex + 1);
+        else if (e.key === 'ArrowLeft' || e.key === 'PageUp') loadPage(currentPageIndex - 1);
+        else return;
+        e.preventDefault();
+    });
 
     // --- Keynote media (sidebar gallery + video player) ---
     let galleryToken = 0;
@@ -418,9 +572,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const slideshowCanvas = document.getElementById('slideshowCanvas');
     const slideshowCtx = slideshowCanvas.getContext('2d');
     const slideshowCounter = document.getElementById('slideshowCounter');
+    const slideshowRotateBtn = document.getElementById('slideshowRotate');
     let slideshowOpen = false;
     let slideshowIndex = 0;
     let slideshowIdleTimer = null;
+    let slideshowRotated = false; // turn the slide 90° while the screen is upright
     let swipeStart = null;
     let lastSwipeTime = 0;
 
@@ -428,10 +584,40 @@ document.addEventListener('DOMContentLoaded', () => {
         return document.fullscreenElement || document.webkitFullscreenElement;
     }
 
+    function isPhone() {
+        return window.matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600;
+    }
+
+    // The slide is only turned while the slideshow area is taller than it is wide
+    function slideshowIsRotated() {
+        return slideshowRotated && slideshowEl.clientHeight > slideshowEl.clientWidth;
+    }
+
+    // Scale and offset that fit the slide into a w x h area (axes swapped when turned)
+    function slideshowFit(w, h, rotated) {
+        const areaW = rotated ? h : w;
+        const areaH = rotated ? w : h;
+        const scale = Math.min(areaW / keynoteDoc.width, areaH / keynoteDoc.height);
+        return { scale, x: (areaW - keynoteDoc.width * scale) / 2, y: (areaH - keynoteDoc.height * scale) / 2 };
+    }
+
+    // Screen position -> slide point, undoing the 90° turn (turned drawing: x = screen y, y = width - screen x)
+    function slideshowPoint(clientX, clientY) {
+        const rect = slideshowCanvas.getBoundingClientRect();
+        const rotated = slideshowIsRotated();
+        let px = clientX - rect.left;
+        let py = clientY - rect.top;
+        if (rotated) [px, py] = [py, rect.width - px];
+        const fit = slideshowFit(rect.width, rect.height, rotated);
+        return { x: (px - fit.x) / fit.scale, y: (py - fit.y) / fit.scale };
+    }
+
     function openSlideshow() {
         if (!keynoteDoc) return;
         slideshowOpen = true;
         slideshowIndex = isKeynotePage() ? pagesData[currentPageIndex].slideIndex : 0;
+        // Phones start sideways: this works even when the phone's rotation lock is on
+        slideshowRotated = isPhone();
         slideshowEl.style.display = 'block';
         if (document.activeElement) document.activeElement.blur();
 
@@ -441,7 +627,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (request) {
             try {
                 const result = request.call(root);
-                if (result && result.catch) result.catch(() => {});
+                // Android can then lock the screen to landscape
+                if (result && result.then) result.then(lockLandscape).catch(() => {});
             } catch (error) {
                 // Not allowed here (e.g. iPhone): the overlay still covers the window
             }
@@ -450,11 +637,22 @@ document.addEventListener('DOMContentLoaded', () => {
         wakeSlideshowControls();
     }
 
+    function lockLandscape() {
+        if (isPhone() && screen.orientation && screen.orientation.lock) {
+            screen.orientation.lock('landscape').catch(() => {});
+        }
+    }
+
     function closeSlideshow() {
         if (!slideshowOpen) return;
         slideshowOpen = false;
         slideshowEl.style.display = 'none';
         clearTimeout(slideshowIdleTimer);
+        try {
+            if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        } catch (error) {
+            // Nothing was locked
+        }
         if (fullscreenElement()) {
             const exit = document.exitFullscreen || document.webkitExitFullscreen;
             const result = exit && exit.call(document);
@@ -478,11 +676,22 @@ document.addEventListener('DOMContentLoaded', () => {
             slideshowCanvas.width = w;
             slideshowCanvas.height = h;
         }
+        const upright = slideshowEl.clientHeight > slideshowEl.clientWidth;
+        const rotated = slideshowIsRotated();
+        slideshowEl.classList.toggle('rotated', rotated);
+        slideshowRotateBtn.style.display = upright ? '' : 'none';
+        slideshowRotateBtn.classList.toggle('active', slideshowRotated);
+
         slideshowCtx.fillStyle = '#000';
         slideshowCtx.fillRect(0, 0, w, h);
-        const scale = Math.min(w / keynoteDoc.width, h / keynoteDoc.height);
-        keynoteDoc.render(slideshowCtx, slideshowIndex,
-            (w - keynoteDoc.width * scale) / 2, (h - keynoteDoc.height * scale) / 2, scale);
+        const fit = slideshowFit(w, h, rotated);
+        slideshowCtx.save();
+        if (rotated) {
+            slideshowCtx.translate(w, 0);
+            slideshowCtx.rotate(Math.PI / 2);
+        }
+        keynoteDoc.render(slideshowCtx, slideshowIndex, fit.x, fit.y, fit.scale);
+        slideshowCtx.restore();
         slideshowCounter.textContent = `${slideshowIndex + 1} / ${keynoteDoc.slides.length}`;
         keynoteDoc.preload(slideshowIndex + 1);
     }
@@ -498,22 +707,24 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('slideshowPrev').addEventListener('click', () => showSlide(slideshowIndex - 1));
     document.getElementById('slideshowNext').addEventListener('click', () => showSlide(slideshowIndex + 1));
     document.getElementById('slideshowExit').addEventListener('click', closeSlideshow);
+    slideshowRotateBtn.addEventListener('click', () => {
+        slideshowRotated = !slideshowRotated;
+        renderSlideshow();
+        wakeSlideshowControls();
+    });
     slideshowEl.addEventListener('mousemove', wakeSlideshowControls);
 
-    // Click a video to play it, the left third to go back, anywhere else to go forward
+    // Tap a video to play it, the slide's left third to go back, anywhere else to go forward
     slideshowCanvas.addEventListener('click', (e) => {
         if (Date.now() - lastSwipeTime < 400) return;
-        const rect = slideshowCanvas.getBoundingClientRect();
-        const scale = Math.min(rect.width / keynoteDoc.width, rect.height / keynoteDoc.height);
-        const x = (e.clientX - rect.left - (rect.width - keynoteDoc.width * scale) / 2) / scale;
-        const y = (e.clientY - rect.top - (rect.height - keynoteDoc.height * scale) / 2) / scale;
-        if (keynoteDoc.isOverMovie(slideshowIndex, x, y)) {
-            keynoteDoc.movieAt(slideshowIndex, x, y)
+        const p = slideshowPoint(e.clientX, e.clientY);
+        if (keynoteDoc.isOverMovie(slideshowIndex, p.x, p.y)) {
+            keynoteDoc.movieAt(slideshowIndex, p.x, p.y)
                 .then(movie => { if (movie) openVideo(movie.url, movie.name); })
                 .catch(error => console.warn('Video error:', error));
             return;
         }
-        showSlide(slideshowIndex + (e.clientX - rect.left < rect.width / 3 ? -1 : 1));
+        showSlide(slideshowIndex + (p.x < keynoteDoc.width / 3 ? -1 : 1));
     });
 
     // Swipe left/right on touch screens
@@ -526,9 +737,11 @@ document.addEventListener('DOMContentLoaded', () => {
     slideshowEl.addEventListener('touchend', (e) => {
         if (!swipeStart) return;
         const t = e.changedTouches[0];
-        const dx = t.clientX - swipeStart.x;
-        const dy = t.clientY - swipeStart.y;
+        let dx = t.clientX - swipeStart.x;
+        let dy = t.clientY - swipeStart.y;
         swipeStart = null;
+        // Measure along the slide: when it is turned, its left-right runs down the screen
+        if (slideshowIsRotated()) [dx, dy] = [dy, -dx];
         if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
             lastSwipeTime = Date.now();
             showSlide(slideshowIndex + (dx < 0 ? 1 : -1));
